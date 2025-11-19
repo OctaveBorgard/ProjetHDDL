@@ -1,0 +1,68 @@
+# Ignore large file
+*.zip
+*.pth
+*.png
+*.jpg
+*.bmp
+*.tar
+*.mp4
+
+
+
+
+# beamer
+*.nav
+*.pre
+*.snm
+*.vrb
+*.soc
+*.lox
+# glossaries
+*.acn
+*.acr
+*.glg
+*.glo
+*.gls
+*.glsdefs
+*.lzo
+*.lzs
+*.slg
+*.slo
+*.sls
+# TikZ & PGF
+*.dpth
+*.md5
+*.auxlock
+
+# Large files
+*.pt
+*.pt.*
+*.pth 
+*.pdf 
+*.ipynb
+*.csv
+*.h5
+
+# Cache 
+__pycache__ 
+.vscode 
+.dist 
+*.vscode 
+*.dist 
+*.aux
+*.fdb_latexmk 
+*.fls 
+*.log 
+*.out 
+*.synctex.gz
+*.bbl
+*.blg
+*.toc  
+*.sh
+
+
+*.pth 
+*.pt 
+
+**/data/
+exp/
