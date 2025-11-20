@@ -41,6 +41,8 @@ def create_df(cls_list_path: str, image_path: str,  segmentation_annot_path:str 
         seg_annot_list = []
     with open(cls_list_path, "r") as f:
         for line in f:
+            if not line or line.startswith('#'):
+                continue
             parts = line.strip().split()
             if len(parts) != 4:
                 continue
@@ -126,11 +128,11 @@ class CatDogBinary(CatDogDataset):
     
     def _get_single(self, index):
         img_path= self.df.loc[index,'image_path']
-        img = decode_image(img_path)
+        img = decode_image(img_path)[:3]
         if self.transform is not None:
             img = self.transform(img)
         label = self.df.loc[index, 'label']
-        return img, label
+        return img, torch.tensor(label)
     
 class CatDogBreed(CatDogDataset):
     def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms=None, *arg, **kwarg):
@@ -139,12 +141,12 @@ class CatDogBreed(CatDogDataset):
     
     def _get_single(self, index):
         img_path= self.df.loc[index,'image_path']
-        img = decode_image(img_path)
+        img = decode_image(img_path)[:3]
         if self.transform is not None:
             img = self.transform(img)
 
         label = self.df.loc[index, 'breed_id']
-        return img, label
+        return img, torch.tensor(label)
     
 class CatDogSegmentation(CatDogDataset):
     def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms=None, *arg, **kwarg):
@@ -153,7 +155,7 @@ class CatDogSegmentation(CatDogDataset):
     
     def _get_single(self, index):
         img_path= self.df.loc[index,'image_path']
-        img = decode_image(img_path)
+        img = decode_image(img_path)[:3]
         if self.transform is not None:
             img = self.transform(img)
 
