@@ -10,12 +10,13 @@ import os
 import sys
 import numpy as np
 import deepinv as dinv
+import matplotlib
+matplotlib.use("Agg")
 
 # %%
 def training_loop(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    preprocess: v2,
     lr_scheduler: torch.optim.lr_scheduler,
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader,
@@ -29,7 +30,7 @@ def training_loop(
     model = model.to(config.device)
     ema_model = AveragedModel(model, avg_fn=ema_avg_fn, use_buffers=True)
     ema_model = ema_model.to(config.device)
-    state = logger.load_checkpoint()
+    state = logger.load_latest_checkpoint()
     if state is not None:
         model.load_state_dict(state['model_state_dict'])
         optimizer.load_state_dict(state['optimizer_state_dict'])
@@ -45,6 +46,10 @@ def training_loop(
     train_avg_loss = OnlineMovingAverage(size=5000)
     test_avg_loss = OnlineMovingAverage(size=1000)
     criterion = torch.nn.CrossEntropyLoss()
+
+    cutmix = v2.CutMix(num_classes=len(class_str))
+    mixup = v2.MixUp(num_classes=len(class_str))
+    cutmix_or_mixup = v2.RandomChoice([cutmix, mixup], p=[0.5, 0.5])
     for epoch in range(start_epoch, config.num_epochs):
         pb = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs}", mininterval=10)
         for images, labels in pb:
@@ -52,11 +57,12 @@ def training_loop(
             # targets is a list of tensor
             model.train()
             images = torch.stack(images).to(config.device)
-            images_transformed = preprocess(images)
             labels = torch.tensor(labels, device=config.device)
 
-            pred_labels = model(images_transformed)
-            loss = criterion(pred_labels, labels)
+            images_aug, labels_aug = cutmix_or_mixup(images, labels)
+
+            pred_labels = model(images_aug)
+            loss = criterion(pred_labels, labels_aug)
 
             optimizer.zero_grad()
             loss.backward()
@@ -75,10 +81,9 @@ def training_loop(
                 with torch.no_grad():
                     images_test, labels_test =next(iter(val_loader))
                     images_test = torch.stack(images_test).to(config.device) 
-                    images_test_transformed = preprocess(images_test)
                     labels_test = torch.tensor(labels_test, device=config.device)
 
-                    pred_labels_test = model(images_test_transformed)
+                    pred_labels_test = model(images_test)
                     test_loss = criterion(pred_labels_test, labels_test).item()
                 
                 test_avg_loss.update(test_loss/len(images_test))
@@ -116,15 +121,14 @@ def training_loop(
                 # Log images of validation set
                 images_test, labels_test = next(iter(val_loader))
                 images_test = torch.stack(images_test[:num_log_images]).to(config.device)
-                images_val_transformed = preprocess(images_test)
 
                 labels_test = labels_test[:num_log_images]
-                pred_labels_val = model(images_val_transformed).argmax(dim=1, keepdim=False).detach().tolist()
+                pred_labels_test = model(images_test).argmax(dim=1, keepdim=False).detach().tolist()
 
                 if class_str is not None:
-                    titles = [f"{class_str[int(i.item())]} : {class_str[int(j)]}" for i,j in zip(labels_test, pred_labels_val)]
+                    titles = [f"{class_str[int(i.item())]} : {class_str[int(j)]}" for i,j in zip(labels_test, pred_labels_test)]
                 else:
-                    titles = [f"{int(i.item())} : {int(j)}" for i,j in zip(labels_test, pred_labels_val)]
+                    titles = [f"{int(i.item())} : {int(j)}" for i,j in zip(labels_test, pred_labels_test)]
                 
                 fig = dinv.utils.plot(img_list=list(images_test.unbind(0)),
                                             titles=titles,
@@ -167,12 +171,13 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Training script for EfficienttNetB0 for Dog and Cat classification task.")
     parser.add_argument("--problem_type", type=str, default="binaryclassification",
-                        choices=['binaryclassification', 'finclassification'])
+                        choices=['binaryclassification', 'fineclassification'])
     parser.add_argument("--train_test_ratio", type=float, default=0.8, help="The train test split ratio")
     parser.add_argument("--num_epochs", type=int, default=300, help="Numeber of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--save_dir", type=str, help="Saved directory",
                         default='/home/bao/School/5A/HDDL/bacteria_detection_app/exp/default')
+    parser.add_argument("--unfreeze_blocks", type=int, default=2, help="Number of blocks to unfreeze in the model")
     args = parser.parse_args()
 
     #################### DEFINE DATASET ##############################
@@ -182,10 +187,10 @@ if __name__ == "__main__":
     df = create_df(cls_list_path=os.path.join(data_path, "annotations/list.txt"),
                    image_path=os.path.join(data_path, "images"))
     if args.problem_type.lower() == "binaryclassification":
-        dataset_full = CatDogBinary(df, transforms=v2.Resize((224,224)))
+        dataset_full = CatDogBinary(df)
         class_str = dataset_full.species
     elif args.problem_type.lower() == "fineclassification":
-        dataset_full = CatDogBreed(df, transforms=v2.Resize((224,224)))
+        dataset_full = CatDogBreed(df)
         class_str = dataset_full.breeds
     else:
         raise ValueError("the problem type must be \"binary classifiction\" or \"fineclassification\"")
@@ -200,6 +205,22 @@ if __name__ == "__main__":
     train_dataset, test_dataset = random_split(dataset_full,
                                                [train_size, test_size],
                                                generator=g)
+    transform_train = v2.Compose([
+        v2.Resize((224,224)),
+        v2.RandomHorizontalFlip(),
+        v2.RandomGrayscale(p=0.1),
+        v2.RandomRotation(degrees=15),
+        v2.GaussianNoise(),
+        v2.ColorJitter(),
+        v2.ToDtype(dtype=torch.float32, scale=True)
+    ])
+
+    transform_test =  v2.Compose([
+        v2.Resize((224,224)),
+        v2.ToDtype(dtype=torch.float32, scale=True)
+    ])
+    train_dataset.dataset.transform = transform_train
+    test_dataset.dataset.transform = transform_test
 
     if train_size < args.batch_size:
         sampler = data.RandomSampler(train_dataset, replacement=True, num_samples=args.batch_size)
@@ -217,16 +238,21 @@ if __name__ == "__main__":
     ########################### DEFINE MODEL ########################
     model_kwargs = dict(weights=EfficientNet_B0_Weights.DEFAULT)
     model = efficientnet_b0(**model_kwargs)
+
+    # Freeze ALL parameters first
+    for param in model.parameters():
+        param.requires_grad = False
+
+    # Replace the classification head
     model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, len(class_str))
     # Train only the classification head
-    for name, param in model.named_parameters():
-        if not name.startswith("classifier"):
-            param.requires_grad = False
+    for block in model.features[-args.unfreeze_blocks:]:
+        for param in block.parameters():
+            param.requires_grad = True
 
     print("Number of trainable parameters: ", sum([p.numel() for p in model.parameters() if p.requires_grad]))
     print("Number of parameters: ", sum([p.numel() for p in model.parameters()]))
 
-    preprocess = EfficientNet_B0_Weights.DEFAULT.transforms()
 
 
     ######################### Training Config and training logger ##################
@@ -238,22 +264,31 @@ if __name__ == "__main__":
     training_config.update(**vars(args))
 
     # Create logging configuration
-    logger = LoggingConfig(project_dir=os.path.join(project_path, args.save_dir),
-                           exp_name=f"EfficientNet_{train_size}")
-    logger.monitor_metric = "train_avg_loss"
-    logger.monitor_mode = "min"
-    logger.num_log_images = 5
-    logger.initialize()
-    logger.log_hyperparameters(vars(args), main_key="training_config")
-
+    monitor_metric = "test_avg_loss"
+    monitor_mode = "min"
+    num_log_images = 5
 
     # Save checkpoint every 400 steps
     num_step_per_epoch = max(len(train_loader), 1)
     freq = max(1, int(400 // num_step_per_epoch))
-    logger.save_freq = freq
-    logger.val_epoch_freq = freq
-    logger.log_loss_freq = 5
-    logger.log_image_freq = 200
+    save_freq = freq
+    val_epoch_freq = freq
+    log_loss_freq = 5
+    log_image_freq = 200
+
+    logger_kwargs = dict(monitor_metric=monitor_metric,
+                         monitor_mode=monitor_mode,
+                         save_freq=save_freq,
+                         val_epoch_freq=val_epoch_freq,
+                         log_loss_freq=log_loss_freq,
+                         log_image_freq=log_image_freq,
+                         num_log_images=num_log_images)
+    
+    logger = LoggingConfig(project_dir=os.path.join(project_path, args.save_dir),
+                        exp_name=f"EfficientNet_{train_size}",
+                        **logger_kwargs)
+    logger.initialize()
+    logger.log_hyperparameters(vars(args), main_key="training_config")
 
     optim_config = OptimizationConfig()
     optimizer = optim_config.get_optimizer(model)
@@ -263,13 +298,13 @@ if __name__ == "__main__":
     ########################## Lance training loop ###############################
     training_loop(model=model,
                   optimizer=optimizer,
-                  preprocess=preprocess,
                   lr_scheduler=lr_scheduler,
                   train_loader=train_loader,
                   val_loader=val_loader,
                   config=training_config,
                   logger=logger,
                   class_str=class_str)
+
 
 
 
