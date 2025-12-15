@@ -76,6 +76,7 @@ class CatDogDataset(Dataset):
             'pomeranian', 'pug', 'Ragdoll', 'Russian_Blue', 'saint_bernard', 'samoyed',
             'scottish_terrier', 'shiba_inu', 'Siamese', 'Sphynx', 'staffordshire_bull_terrier', 'wheaten_terrier',
              'yorkshire_terrier']
+    breeds_to_ids = {breed: i for i, breed in enumerate(breeds)}
     species = ['cat', 'dog']
 
     def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms, *arg, **kwarg):
@@ -127,11 +128,12 @@ class CatDogBinary(CatDogDataset):
         super().__init__(df, transforms, *arg, **kwarg)
     
     def _get_single(self, index):
-        img_path= self.df.loc[index,'image_path']
+        row = self.df.iloc[index]  
+        img_path = row["image_path"]
         img = decode_image(img_path)[:3]
         if self.transform is not None:
             img = self.transform(img)
-        label = self.df.loc[index, 'label']
+        label = row['label']
         return img, torch.tensor(label)
     
 class CatDogBreed(CatDogDataset):
@@ -140,12 +142,13 @@ class CatDogBreed(CatDogDataset):
     
     
     def _get_single(self, index):
-        img_path= self.df.loc[index,'image_path']
+        row = self.df.iloc[index]  
+        img_path = row["image_path"]
         img = decode_image(img_path)[:3]
         if self.transform is not None:
             img = self.transform(img)
 
-        label = self.df.loc[index, 'breed_id']
+        label = row['breed_id']
         return img, torch.tensor(label)
     
 class CatDogSegmentation(CatDogDataset):
@@ -154,12 +157,13 @@ class CatDogSegmentation(CatDogDataset):
     
     
     def _get_single(self, index):
-        img_path= self.df.loc[index,'image_path']
+        row = self.df.iloc[index]  
+        img_path = row["image_path"]
         img = decode_image(img_path)[:3]
         if self.transform is not None:
             img = self.transform(img)
 
-        segm_path = self.df.loc[index, 'segm_path']
+        segm_path = row["segm_path"]
         segm = decode_image(segm_path) - 1
         return img, segm
     
