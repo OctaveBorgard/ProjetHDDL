@@ -54,3 +54,103 @@ classes =  EfficientNet_B0_Weights.DEFAULT.meta["categories"]
 pred_idx = out.argmax(dim=1)
 plot(img_samples, titles=[classes[id] for id in pred_idx])
 # %%
+from torch.utils.data import random_split, RandomSampler, DataLoader
+from training import (collate_fn,
+                      LoggingConfig,
+                      TrainingConfig)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+train_test_ratio = 0.9
+batch_size = 64
+save_dir = "exp/binary_classification"
+
+#################### DEFINE DATASET ##############################
+df = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/list.txt"),
+                image_path=os.path.join(project_abs_dir, "data/images"))
+dataset_full = CatDogBinary(df)
+class_str = dataset_full.species
+
+train_size = int(train_test_ratio*len(dataset_full))
+test_size = len(dataset_full) - train_size
+print(f"Train set size: {train_size}, test set size: {test_size}")
+
+g = torch.Generator().manual_seed(42)
+train_dataset, test_dataset = random_split(dataset_full,
+                                            [train_size, test_size],
+                                            generator=g)
+
+transform_eval =  v2.Compose([
+    v2.Resize((224,224)),
+    v2.ToDtype(dtype=torch.float32, scale=True)
+])
+
+train_dataset.dataset.transform = transform_eval
+test_dataset.dataset.transform = transform_eval 
+if train_size < batch_size:
+    sampler = RandomSampler(train_dataset, replacement=True, num_samples=batch_size)
+    shuffle = False
+else:
+    sampler = None
+    shuffle = True
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn,
+                                shuffle=shuffle, pin_memory=True, sampler=sampler, drop_last=False,
+                                num_workers=8)
+val_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, drop_last=False)
+
+########################### DEFINE MODEL ########################
+model_kwargs = dict(weights=EfficientNet_B0_Weights.DEFAULT)
+model = efficientnet_b0(**model_kwargs)
+model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, len(class_str))
+
+
+
+######################### training logger ##################
+
+logger = LoggingConfig(project_dir=os.path.join(project_abs_dir, save_dir),
+                        exp_name=f"EfficientNet_{train_size}")
+logger.monitor_metric = "train_avg_loss"
+logger.monitor_mode = "min"
+
+# state = logger.load_checkpoint()
+state = torch.load(os.path.join(project_abs_dir, "exp/binary_classification/EfficientNet_6614/checkpoints/epoch_066_test_avg_loss_0.0013.pth"))
+model.load_state_dict(state['model_state_dict'])
+model.to(device)
+model.eval()
+
+train_accuracy = 0
+test_accuracy = 0
+
+with torch.no_grad():
+    for images, labels in train_loader:
+        images = torch.stack(images).to(device)
+        labels = torch.tensor(labels, device=device)
+
+        pred_labels = model(images).detach().argmax(
+            dim=1, keepdim=False)
+        indice_fail = labels != pred_labels
+        if torch.sum(indice_fail) > 0:
+            show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
+        train_accuracy += torch.sum(labels == pred_labels).item()
+    train_accuracy = train_accuracy/train_size
+
+    for images, labels in val_loader:
+        images = torch.stack(images).to(device)
+        labels = torch.tensor(labels, device=device)
+
+        pred_labels = model(images).detach().argmax(
+            dim=1, keepdim=False)
+        
+        indice_fail = labels != pred_labels
+        if torch.sum(indice_fail) > 0:
+            show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
+
+        test_accuracy += torch.sum(labels == pred_labels).item()
+    test_accuracy = test_accuracy/test_size
+
+print(f"Accuracy obtained on train set: {train_accuracy:.3f}, and on test set: {test_accuracy:.3f}")
+    
+
+
+
+# %%
