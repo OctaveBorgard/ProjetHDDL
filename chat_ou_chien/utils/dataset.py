@@ -1,11 +1,13 @@
 #%%
 import torch
 from torch.utils.data import Dataset
+from torchvision.io import decode_image
+from torchvision.transforms import v2
+from torchvision.tv_tensors import Image as TvImage
+from torchvision.tv_tensors import Mask as TvMask
 import torchvision
 import numpy as np
 import pandas as pd
-from torchvision.transforms import v2
-from torchvision.io import decode_image
 from PIL import Image
 import os
 import warnings
@@ -79,7 +81,7 @@ class CatDogDataset(Dataset):
     breeds_to_ids = {breed: i for i, breed in enumerate(breeds)}
     species = ['cat', 'dog']
 
-    def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms, *arg, **kwarg):
+    def __init__(self, df: pd.DataFrame, transform: torchvision.transforms, *arg, **kwarg):
         """
         Parameters
         ----------
@@ -88,7 +90,7 @@ class CatDogDataset(Dataset):
        """
         super().__init__(*arg, **kwarg)
         self.df = df
-        self.transform = transforms
+        self.transform = transform
     
     def __len__(self):
         return len(self.df)
@@ -124,8 +126,8 @@ class CatDogDataset(Dataset):
     
 
 class CatDogBinary(CatDogDataset):
-    def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms=None, *arg, **kwarg):
-        super().__init__(df, transforms, *arg, **kwarg)
+    def __init__(self, df: pd.DataFrame, transform: torchvision.transforms=None, *arg, **kwarg):
+        super().__init__(df, transform, *arg, **kwarg)
     
     def _get_single(self, index):
         row = self.df.iloc[index]  
@@ -137,8 +139,8 @@ class CatDogBinary(CatDogDataset):
         return img, torch.tensor(label)
     
 class CatDogBreed(CatDogDataset):
-    def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms=None, *arg, **kwarg):
-        super().__init__(df, transforms, *arg, **kwarg)
+    def __init__(self, df: pd.DataFrame, transform: torchvision.transforms=None, *arg, **kwarg):
+        super().__init__(df, transform, *arg, **kwarg)
     
     
     def _get_single(self, index):
@@ -152,19 +154,25 @@ class CatDogBreed(CatDogDataset):
         return img, torch.tensor(label)
     
 class CatDogSegmentation(CatDogDataset):
-    def __init__(self, df: pd.DataFrame, transforms: torchvision.transforms=None, *arg, **kwarg):
-        super().__init__(df, transforms, *arg, **kwarg)
-    
+    def __init__(self, df: pd.DataFrame, transform: torchvision.transforms=None, *arg, **kwarg):
+        super().__init__(df, transform, *arg, **kwarg)
     
     def _get_single(self, index):
         row = self.df.iloc[index]  
         img_path = row["image_path"]
         img = decode_image(img_path)[:3]
-        if self.transform is not None:
-            img = self.transform(img)
+        img = TvImage(img)
 
+        
         segm_path = row["segm_path"]
-        segm = decode_image(segm_path) - 1
+        segm = decode_image(segm_path)[:1]
+        segm = TvMask(segm)
+        
+        if self.transform is not None:
+            # Apply transforms to both image and mask together to keep them aligned
+            img, segm = self.transform(img, segm)
+
+        segm = segm - 1
         return img, segm
     
 
