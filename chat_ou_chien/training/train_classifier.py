@@ -186,25 +186,29 @@ if __name__ == "__main__":
 
     df = create_df(cls_list_path=os.path.join(data_path, "annotations/list.txt"),
                    image_path=os.path.join(data_path, "images"))
+    
+    ramdom_state = np.random.RandomState(seed=42)
+    df_train = df.sample(frac=args.train_test_ratio, random_state=ramdom_state)
+    df_test = df.drop(df_train.index).reset_index(drop=True)
+    df_train = df_train.reset_index(drop=True)
+    
     if args.problem_type.lower() == "binaryclassification":
-        dataset_full = CatDogBinary(df)
-        class_str = dataset_full.species
+        dataset_train = CatDogBinary(df_train)
+        dataset_test = CatDogBinary(df_test)
+        class_str = CatDogBinary.species
     elif args.problem_type.lower() == "fineclassification":
-        dataset_full = CatDogBreed(df)
-        class_str = dataset_full.breeds
+        dataset_train = CatDogBreed(df_train)
+        dataset_test = CatDogBreed(df_test)
+        class_str = CatDogBreed.breeds
     else:
         raise ValueError("the problem type must be \"binary classifiction\" or \"fineclassification\"")
     
     
 
-    train_size = int(args.train_test_ratio*len(dataset_full))
-    test_size = len(dataset_full) - train_size
+    train_size = len(dataset_train)
+    test_size = len(dataset_test)
     print(f"Train set size: {train_size}, test set size: {test_size}")
 
-    g = torch.Generator().manual_seed(42)
-    train_dataset, test_dataset = random_split(dataset_full,
-                                               [train_size, test_size],
-                                               generator=g)
     transform_train = v2.Compose([
         v2.Resize((224,224)),
         v2.RandomHorizontalFlip(),
@@ -219,20 +223,20 @@ if __name__ == "__main__":
         v2.Resize((224,224)),
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
-    train_dataset.dataset.transform = transform_train
-    test_dataset.dataset.transform = transform_test
+    dataset_train.dataset.transform = transform_train
+    dataset_test.dataset.transform = transform_test
 
     if train_size < args.batch_size:
-        sampler = data.RandomSampler(train_dataset, replacement=True, num_samples=args.batch_size)
+        sampler = data.RandomSampler(dataset_train, replacement=True, num_samples=args.batch_size)
         shuffle = False
     else:
         sampler = None
         shuffle = True
     
-    train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, collate_fn=collate_fn,
+    train_loader = data.DataLoader(dataset_train, batch_size=args.batch_size, collate_fn=collate_fn,
                                    shuffle=shuffle, pin_memory=True, sampler=sampler, drop_last=False,
                                    num_workers=8)
-    val_loader = data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, drop_last=False)
+    val_loader = data.DataLoader(dataset_test, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, drop_last=False)
 
 
     ########################### DEFINE MODEL ########################
