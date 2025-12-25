@@ -47,7 +47,7 @@ def training_loop(
         start_epoch = 0
     
     num_classes = len(class_str)
-    
+
     logger.global_step = global_step
 
 
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     import argparse  
     from train_utils import collate_fn, DiceCELoss
 
-    parser = argparse.ArgumentParser(description="Training script for EfficienttNetB0 for Dog and Cat classification task.")
+    parser = argparse.ArgumentParser(description="Training script for Unet_Segmenter task.")
     parser.add_argument("--train_test_ratio", type=float, default=0.8, help="The train test split ratio")
     parser.add_argument("--num_epochs", type=int, default=300, help="Numeber of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
@@ -246,7 +246,7 @@ if __name__ == "__main__":
     val_loader = data.DataLoader(dataset_test, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, drop_last=False)
 
 
-    ########################### DEFINE MODEL ########################\
+    ########################### DEFINE MODEL ############################
     model_kwargs = dict(layers_per_block=2,
                         non_linearity="silu",
                         skip_connection=True,
