@@ -71,7 +71,7 @@ logger.monitor_metric = "test_avg_loss"
 logger.monitor_mode = "min"
 
 state = logger.load_latest_checkpoint(checkpoint_path=os.path.join(project_abs_dir,
-                                                                   "exp/fine_classification/EfficientNet_6614/checkpoints/epoch_099_test_avg_loss_0.0100.pth")
+                                                                   "exp/fine_classification/EfficientNet_6614/checkpoints/epoch_129_test_avg_loss_0.0106.pth")
                                     )
 # state = logger.load_best_checkpoint()
 model.load_state_dict(state['model_state_dict'])
@@ -179,10 +179,16 @@ for i in range(len(test_error_pdf)):
     show_images([breed_images[gt_index], breed_images[pred_index]], title=[str(gt_index), str(pred_index)])
 
     
+
 # %%
-unfreezeze_blocks = 3
-for block in model.features[-unfreezeze_blocks:]:
-    print(block)
-    for param in block.parameters():
-        param.requires_grad = True
+dataset_full_raw = CatDogBreed(df)
+image_size = set([img.shape[-2:] for img, _ in dataset_full_raw])
+
+# %%
+image_size = list(image_size)
+print(image_size[:4])
+# %%
+min_h = min([size[0] for size in image_size])
+min_w = min([size[1] for size in image_size])
+print(f"Minimum height: {min_h}, minimum width: {min_w}")
 # %%
