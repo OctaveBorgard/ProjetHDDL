@@ -3,4 +3,6 @@ from .train_utils import (move_to_device,
                           LoggingConfig,
                           TrainingConfig,
                           OptimizationConfig,
-                          OnlineMovingAverage)
+                          OnlineMovingAverage,
+                          DiceLoss,
+                          DiceCELoss)
