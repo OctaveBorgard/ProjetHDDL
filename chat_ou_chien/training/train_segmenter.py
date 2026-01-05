@@ -1,34 +1,35 @@
 #%%
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+from torchmetrics.segmentation import MeanIoU, DiceScore
 from torchvision.transforms import v2
 from tqdm import tqdm
-from train_utils import OptimizationConfig, TrainingConfig, LoggingConfig, OnlineMovingAverage, ema_avg_fn, move_to_device
+from train_utils import OptimizationConfig, TrainingConfig, LoggingConfig, OnlineMovingAverage, ema_avg_fn
 from torch.optim.swa_utils import AveragedModel
 import os
 import sys
 import numpy as np
 import deepinv as dinv
 import matplotlib
+from typing import Callable
 matplotlib.use("Agg")
+
 
 # %%
 def training_loop(
     model: nn.Module,
+    criterion: Callable,
     optimizer: torch.optim.Optimizer,
     lr_scheduler: torch.optim.lr_scheduler,
     train_loader: torch.utils.data.DataLoader,
     val_loader: torch.utils.data.DataLoader,
     config: TrainingConfig,
     logger: LoggingConfig,
-    num_classes: int,
-    class_str: list[str]=None,
-
+    class_str: list[str]
 ):
     # Initialize EMA for model weights using PyTorch's AveragedModel
     swa_start = 1000 # Start using SWA after 1000 iterations
-    
 
     model = model.to(config.device)
     ema_model = AveragedModel(model, avg_fn=ema_avg_fn, use_buffers=True)
@@ -45,14 +46,27 @@ def training_loop(
         global_step = 0
         start_epoch = 0
     
-    logger.global_step = global_step
-    train_avg_loss = OnlineMovingAverage(size=5000)
-    test_avg_loss = OnlineMovingAverage(size=1000)
-    criterion = torch.nn.CrossEntropyLoss()
+    num_classes = len(class_str)
 
-    cutmix = v2.CutMix(num_classes=num_classes)
-    mixup = v2.MixUp(num_classes=num_classes)
-    cutmix_or_mixup = v2.RandomChoice([cutmix, mixup], p=[0.5, 0.5])
+    logger.global_step = global_step
+
+
+    train_avg_loss = OnlineMovingAverage(size=5000)
+    mean_iou_metric_avg_train = OnlineMovingAverage(size=1000)
+    dice_score_metric_avg_train = OnlineMovingAverage(size=1000)
+
+    test_avg_loss = OnlineMovingAverage(size=1000)
+    mean_iou_metric_avg_test = OnlineMovingAverage(size=1000)
+    dice_score_metric_avg_test = OnlineMovingAverage(size=1000)
+
+
+    mean_iou_metric_train = MeanIoU(num_classes=num_classes, input_format='index').to(config.device)
+    dice_score_metric_train = DiceScore(num_classes=num_classes, input_format='index').to(config.device)
+
+    mean_iou_metric_test = MeanIoU(num_classes=num_classes, input_format='index').to(config.device)
+    dice_score_metric_test = DiceScore(num_classes=num_classes, input_format='index').to(config.device)
+
+
     for epoch in range(start_epoch, config.num_epochs):
         pb = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs}", mininterval=10)
         for images, labels in pb:
@@ -60,12 +74,11 @@ def training_loop(
             # targets is a list of tensor
             model.train()
             images = torch.stack(images).to(config.device)
-            labels = torch.tensor(labels, device=config.device)
+            labels = torch.stack(labels).to(config.device)
 
-            images_aug, labels_aug = cutmix_or_mixup(images, labels)
 
-            pred_labels = model(images_aug)
-            loss = criterion(pred_labels, labels_aug)
+            pred_labels = model(images)
+            loss = criterion(pred_labels, labels)
 
             optimizer.zero_grad()
             loss.backward()
@@ -84,18 +97,34 @@ def training_loop(
                 with torch.no_grad():
                     images_test, labels_test =next(iter(val_loader))
                     images_test = torch.stack(images_test).to(config.device) 
-                    labels_test = torch.tensor(labels_test, device=config.device)
+                    labels_test = torch.stack(labels_test).to(config.device)
 
                     pred_labels_test = model(images_test)
-                    test_loss = criterion(pred_labels_test, labels_test).item()
+                    test_loss = criterion(pred_labels_test, labels_test)
+                    mean_iou_test = mean_iou_metric_test(pred_labels_test.argmax(dim=1, keepdim=True), labels_test)
+                    dice_score_test = dice_score_metric_test(pred_labels_test.argmax(dim=1, keepdim=True), labels_test)
+
+
+                    mean_iou_train = mean_iou_metric_train(pred_labels.argmax(dim=1, keepdim=True), labels)
+                    dice_score_train = dice_score_metric_train(pred_labels.argmax(dim=1, keepdim=True), labels)
                 
-                test_avg_loss.update(test_loss/len(images_test))
-                del images_test,  labels_test, pred_labels_test, test_loss
+                test_avg_loss.update(test_loss.item())
+                mean_iou_metric_avg_test.update(mean_iou_test.item())
+                dice_score_metric_avg_test.update(dice_score_test.item())
+
+                mean_iou_metric_avg_train.update(mean_iou_train.item())
+                dice_score_metric_avg_train.update(dice_score_train.item())
+
+                del images_test,  labels_test, pred_labels_test, test_loss, mean_iou_test, dice_score_test, mean_iou_train, dice_score_train
                 torch.cuda.empty_cache()    
 
                 metrics = {
                     "val_loss": test_avg_loss.mean,
+                    "val_mean_iou": mean_iou_metric_avg_test.mean,
+                    "val_dice_score": dice_score_metric_avg_test.mean,
                     "train_loss": train_avg_loss.mean,
+                    "train_mean_iou": mean_iou_metric_avg_train.mean,
+                    "train_dice_score": dice_score_metric_avg_train.mean,
                     "lr": optimizer.param_groups[0]["lr"],
                     "max_grad_norm": grad_norm.max()
                 }
@@ -106,38 +135,27 @@ def training_loop(
             if ((logger.global_step+1) % logger.log_image_freq == 0) or (logger.global_step == 0):
                 model.eval()
                 num_log_images = logger.num_log_images
-                train_samples = images[:num_log_images]
-                true_labels = labels[:num_log_images].tolist()
-                pred_labels = pred_labels[:num_log_images].argmax(dim=1, keepdim=False).tolist()
+                train_images = images[:num_log_images]
+                train_labels = labels[:num_log_images]
+                train_pred_labels = pred_labels[:num_log_images].detach()
 
-                if class_str is not None:
-                    titles = [f"{class_str[int(i)]} : {class_str[int(j)]}" for i,j in zip(true_labels, pred_labels)]
-                else:
-                    titles = [f"{int(i)} : {int(j)}" for i,j in zip(true_labels, pred_labels)]
-                
-                fig = dinv.utils.plot(img_list=list(train_samples.unbind(0)),
-                                            titles=titles,
-                                            return_fig=True,
-                                            show=False)
-                logger.log_figure(figure=fig,name="sample from train set",step=logger.global_step)
-                
-                # Log images of validation set
-                images_test, labels_test = next(iter(val_loader))
-                images_test = torch.stack(images_test[:num_log_images]).to(config.device)
-
-                labels_test = labels_test[:num_log_images]
-                pred_labels_test = model(images_test).argmax(dim=1, keepdim=False).detach().tolist()
-
-                if class_str is not None:
-                    titles = [f"{class_str[int(i.item())]} : {class_str[int(j)]}" for i,j in zip(labels_test, pred_labels_test)]
-                else:
-                    titles = [f"{int(i.item())} : {int(j)}" for i,j in zip(labels_test, pred_labels_test)]
-                
-                fig = dinv.utils.plot(img_list=list(images_test.unbind(0)),
-                                            titles=titles,
-                                            return_fig=True,
-                                            show=False)
-                logger.log_figure(figure=fig,name="sample from test set",step=logger.global_step)
+                test_images, test_labels = next(iter(val_loader))
+                test_images = torch.stack(test_images[:num_log_images]).to(config.device)
+                test_labels = torch.stack(test_labels[:num_log_images]).to(config.device)
+                with torch.no_grad():
+                    test_pred_labels = model(test_images).detach()
+                                
+                fig = dinv.utils.plot([train_images.cpu(), 
+                                      train_labels.cpu(), 
+                                      train_pred_labels.argmax(dim=1, keepdim=True).cpu(),
+                                      test_images.cpu(),
+                                      test_labels.cpu(),
+                                      test_pred_labels.argmax(dim=1, keepdim=True).cpu()],
+                                     titles=["train Image", "train gt mask", "train pred mask",
+                                             "test Image", "test gt mask", "test pred mask"],
+                                     return_fig=True,   
+                                     show=False)
+                logger.log_figure(figure=fig,name="samples from train and test sets",step=logger.global_step)
                 
 
 
@@ -163,25 +181,19 @@ def training_loop(
 if __name__ == "__main__":
     import sys
     sys.path.append("..")
-    from utils import (CatDogBinary,
-                       CatDogBreed,
+    from utils import (CatDogSegmentation,
                        create_df)
-    from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+    from models import Unet_Segmenter
     import torch.utils.data as data
-    from torch.utils.data import random_split
     import argparse  
-    from train_utils import collate_fn
-    from torch.utils.data import Subset
+    from train_utils import collate_fn, DiceCELoss
 
-    parser = argparse.ArgumentParser(description="Training script for EfficienttNetB0 for Dog and Cat classification task.")
-    parser.add_argument("--problem_type", type=str, default="binaryclassification",
-                        choices=['binaryclassification', 'fineclassification'])
+    parser = argparse.ArgumentParser(description="Training script for Unet_Segmenter task.")
     parser.add_argument("--train_test_ratio", type=float, default=0.8, help="The train test split ratio")
     parser.add_argument("--num_epochs", type=int, default=300, help="Numeber of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--save_dir", type=str, help="Saved directory",
-                        default='exp/object_detection')
-    parser.add_argument("--unfreeze_blocks", type=int, default=2, help="Number of blocks to unfreeze in the model")
+                        default='/home/bao/School/5A/HDDL/bacteria_detection_app/exp/default')
     args = parser.parse_args()
 
     #################### DEFINE DATASET ##############################
@@ -189,46 +201,37 @@ if __name__ == "__main__":
     data_path = os.path.join(project_path, "data")
 
     df = create_df(cls_list_path=os.path.join(data_path, "annotations/list.txt"),
-                   image_path=os.path.join(data_path, "images"))
+                   image_path=os.path.join(data_path, "images"),
+                   segmentation_annot_path=os.path.join(data_path, "annotations/trimaps"))
     
     ramdom_state = np.random.RandomState(seed=42)
     df_train = df.sample(frac=args.train_test_ratio, random_state=ramdom_state)
     df_test = df.drop(df_train.index).reset_index(drop=True)
     df_train = df_train.reset_index(drop=True)
     
-    if args.problem_type.lower() == "binaryclassification":
-        dataset_train = CatDogBinary(df_train)
-        dataset_test = CatDogBinary(df_test)
-        class_str = CatDogBinary.species
-    elif args.problem_type.lower() == "fineclassification":
-        dataset_train = CatDogBreed(df_train)
-        dataset_test = CatDogBreed(df_test)
-        class_str = CatDogBreed.breeds
-    else:
-        raise ValueError("the problem type must be \"binary classifiction\" or \"fineclassification\"")
-    
-    
+    dataset_train = CatDogSegmentation(df_train)
+    dataset_test = CatDogSegmentation(df_test)
+    class_str = ["background", "cat", "dog"]
 
     train_size = len(dataset_train)
     test_size = len(dataset_test)
     print(f"Train set size: {train_size}, test set size: {test_size}")
 
     transform_train = v2.Compose([
-        v2.Resize((224,224)),
-        v2.ToDtype(dtype=torch.float32, scale=True),
         v2.RandomHorizontalFlip(),
         v2.RandomGrayscale(p=0.1),
-        v2.RandomRotation(degrees=15),
         v2.GaussianNoise(),
         v2.ColorJitter(),
+        v2.RandomCrop((224,224), pad_if_needed=True),
+        v2.ToDtype(dtype=torch.float32, scale=True)
     ])
 
     transform_test =  v2.Compose([
-        v2.Resize((224,224)),
+        v2.RandomCrop((224,224), pad_if_needed=True),
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
-    dataset_train.dataset.transform = transform_train
-    dataset_test.dataset.transform = transform_test
+    dataset_train.transform = transform_train
+    dataset_test.transform = transform_test
 
     if train_size < args.batch_size:
         sampler = data.RandomSampler(dataset_train, replacement=True, num_samples=args.batch_size)
@@ -243,25 +246,14 @@ if __name__ == "__main__":
     val_loader = data.DataLoader(dataset_test, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, drop_last=False)
 
 
-    ########################### DEFINE MODEL ########################
-    model_kwargs = dict(weights=EfficientNet_B0_Weights.DEFAULT)
-    model = efficientnet_b0(**model_kwargs)
+    ########################### DEFINE MODEL ############################
+    model_kwargs = dict(layers_per_block=2,
+                        non_linearity="silu",
+                        skip_connection=True,
+                        center_input_sample=True)
+    model = Unet_Segmenter(**model_kwargs)
 
-    # Freeze ALL parameters first
-    for param in model.parameters():
-        param.requires_grad = False
-
-    # Replace the classification head
-    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, 3)
-    # Train only the classification head
-    for block in model.features[-args.unfreeze_blocks:]:
-        for param in block.parameters():
-            param.requires_grad = True
-
-    print("Number of trainable parameters: ", sum([p.numel() for p in model.parameters() if p.requires_grad]))
-    print("Number of parameters: ", sum([p.numel() for p in model.parameters()]))
-
-
+    print(f"Number of trainable parameters: {sum([p.numel() for p in model.parameters() if p.requires_grad])/1e6:.2f} Million")
 
     ######################### Training Config and training logger ##################
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -274,7 +266,7 @@ if __name__ == "__main__":
     # Create logging configuration
     monitor_metric = "test_avg_loss"
     monitor_mode = "min"
-    num_log_images = 5
+    num_log_images = 3
 
     # Save checkpoint every 400 steps
     num_step_per_epoch = max(len(train_loader), 1)
@@ -302,21 +294,25 @@ if __name__ == "__main__":
     optimizer = optim_config.get_optimizer(model)
     lr_scheduler = optim_config.get_scheduler(optimizer)
 
-    
+    criterion = DiceCELoss(ce_weight=0.5,
+                            dice_weight=0.5,
+                            need_softmax=True,
+                            reduction="mean",
+                            ignore_index=None,
+                            smooth=1e-6)
 
     ########################## Lance training loop ###############################
     training_loop(model=model,
+                  criterion=criterion,
                   optimizer=optimizer,
                   lr_scheduler=lr_scheduler,
                   train_loader=train_loader,
                   val_loader=val_loader,
                   config=training_config,
                   logger=logger,
-                  num_classes=3,
                   class_str=class_str)
 
 
 
 
 
-# %%

@@ -71,7 +71,7 @@ logger.monitor_metric = "test_avg_loss"
 logger.monitor_mode = "min"
 
 state = logger.load_latest_checkpoint(checkpoint_path=os.path.join(project_abs_dir,
-                                                                   "exp/fine_classification/EfficientNet_6614/checkpoints/epoch_099_test_avg_loss_0.0100.pth")
+                                                                   "exp/fine_classification/EfficientNet_6614/checkpoints/epoch_129_test_avg_loss_0.0106.pth")
                                     )
 # state = logger.load_best_checkpoint()
 model.load_state_dict(state['model_state_dict'])
@@ -189,32 +189,17 @@ transform_train = v2.Compose([
 ])
 
 
-df = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/list.txt"),
-                image_path=os.path.join(project_abs_dir, "data/images"))
-dataset_full = CatDogBreed(df)
-class_str = dataset_full.breeds
 
-train_size = int(train_test_ratio*len(dataset_full))
-test_size = len(dataset_full) - train_size
-print(f"Train set size: {train_size}, test set size: {test_size}")
-
-g = torch.Generator().manual_seed(42)
-train_dataset, test_dataset = random_split(dataset_full,
-                                            [train_size, test_size],
-                                            generator=g)
-
-transform_eval =  v2.Compose([
-
-    v2.Resize((224,224)),
-    v2.ToDtype(dtype=torch.float32, scale=True)
-])
-
-train_dataset.dataset.transform = transform_train
-
-train_loader = DataLoader(train_dataset, batch_size=10, collate_fn=collate_fn,
-                                shuffle=False, pin_memory=True, drop_last=False,
-                                num_workers=8)
 # %%
-sample = next(iter(train_loader))
-show_images(sample[0])
+dataset_full_raw = CatDogBreed(df)
+image_size = set([img.shape[-2:] for img, _ in dataset_full_raw])
+
+# %%
+image_size = list(image_size)
+print(image_size[:4])
+# %%
+min_h = min([size[0] for size in image_size])
+min_w = min([size[1] for size in image_size])
+print(f"Minimum height: {min_h}, minimum width: {min_w}")
+
 # %%

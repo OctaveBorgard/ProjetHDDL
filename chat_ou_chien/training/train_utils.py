@@ -1,6 +1,7 @@
 import torch.optim as optim
 import warnings
 from torch.utils.tensorboard import SummaryWriter
+import torch.nn.functional as F
 import psutil
 import json
 import glob
@@ -510,7 +511,79 @@ def move_to_device(images: list=None, labels: list=None, device="cpu", segmentat
 def collate_fn(batch):
     return tuple(zip(*batch)) 
 
+
+
+### loss functions ###
+
+class DiceLoss(torch.nn.Module):
+    def __init__(self,
+                 smooth: float=1e-6,
+                 reduction: str="mean",
+                 ignore_index: int=None,
+                 need_softmax: bool=False):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+        self.reduction = reduction
+        self.ignore_index = ignore_index
+        self.need_softmax = need_softmax
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        num_classes = preds.shape[1]
         
+        if self.need_softmax:
+            inputs = F.softmax(preds, dim=1)
+        else:
+            inputs = preds
+        
+        # targets: (B, 1, H, W) -> (B, H, W) -> (B, H, W, C) -> (B, C, H, W)
+        targets_one_hot = F.one_hot(targets.squeeze(1).long(), num_classes=num_classes)
+        targets_one_hot = targets_one_hot.permute(0, 3, 1, 2).float()
+        
+        if self.ignore_index is not None:
+            selected_indices = [i for i in range(num_classes) if i != self.ignore_index]
+            inputs = inputs[:,selected_indices,:,:]
+            targets_one_hot = targets_one_hot[:,selected_indices,:,:]
+        
+        intersection = (inputs * targets_one_hot).sum(dim=(2, 3)) #(B, C)
+        
+        cardinality = inputs.sum(dim=(2, 3)) + targets_one_hot.sum(dim=(2, 3)) #(B, C)
+        
+        # Calculate Dice per class
+        dice_score = (2. * intersection + self.smooth) / (cardinality + self.smooth)
+        dice_score = dice_score.mean(dim=-1)
+
+        if self.reduction == "mean":
+            dice_score = dice_score.mean()
+        elif self.reduction == "sum":
+            dice_score = dice_score.sum()
+        
+        return 1 - dice_score
+        
+class DiceCELoss(torch.nn.Module):
+    def __init__(self,
+                 ce_weight: float=0.5,  
+                 dice_weight: float=0.5,
+                 need_softmax: bool=True,
+                 reduction: str="mean",
+                 ignore_index: int=None,
+                 smooth: float=1e-6):
+        super(DiceCELoss, self).__init__()
+        self.ce_weight = ce_weight
+        self.dice_weight = dice_weight
+        self.dice_loss = DiceLoss(reduction=reduction, ignore_index=ignore_index, smooth=smooth, need_softmax=need_softmax)
+        self.ce_loss = torch.nn.CrossEntropyLoss(reduction=reduction)
+        self.need_softmax = need_softmax
+
+    def forward(self, preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if self.need_softmax:
+            ce_loss = self.ce_loss(F.softmax(preds, dim=1), targets.squeeze(1).long())
+            dice_loss = self.dice_loss(F.softmax(preds, dim=1), targets)
+        else:
+            ce_loss = self.ce_loss(preds, targets.squeeze(1).long())
+            dice_loss = self.dice_loss(preds, targets)
+
+        total_loss = self.ce_weight * ce_loss + self.dice_weight * dice_loss
+        return total_loss
 
 
         
