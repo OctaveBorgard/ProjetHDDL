@@ -22,10 +22,13 @@ def training_loop(
     val_loader: torch.utils.data.DataLoader,
     config: TrainingConfig,
     logger: LoggingConfig,
-    class_str: list[str]=None
+    num_classes: int,
+    class_str: list[str]=None,
+
 ):
     # Initialize EMA for model weights using PyTorch's AveragedModel
     swa_start = 1000 # Start using SWA after 1000 iterations
+    
 
     model = model.to(config.device)
     ema_model = AveragedModel(model, avg_fn=ema_avg_fn, use_buffers=True)
@@ -47,8 +50,8 @@ def training_loop(
     test_avg_loss = OnlineMovingAverage(size=1000)
     criterion = torch.nn.CrossEntropyLoss()
 
-    cutmix = v2.CutMix(num_classes=len(class_str))
-    mixup = v2.MixUp(num_classes=len(class_str))
+    cutmix = v2.CutMix(num_classes=num_classes)
+    mixup = v2.MixUp(num_classes=num_classes)
     cutmix_or_mixup = v2.RandomChoice([cutmix, mixup], p=[0.5, 0.5])
     for epoch in range(start_epoch, config.num_epochs):
         pb = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config.num_epochs}", mininterval=10)
@@ -168,6 +171,7 @@ if __name__ == "__main__":
     from torch.utils.data import random_split
     import argparse  
     from train_utils import collate_fn
+    from torch.utils.data import Subset
 
     parser = argparse.ArgumentParser(description="Training script for EfficienttNetB0 for Dog and Cat classification task.")
     parser.add_argument("--problem_type", type=str, default="binaryclassification",
@@ -176,7 +180,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_epochs", type=int, default=300, help="Numeber of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--save_dir", type=str, help="Saved directory",
-                        default='/home/bao/School/5A/HDDL/bacteria_detection_app/exp/default')
+                        default='exp/object_detection')
     parser.add_argument("--unfreeze_blocks", type=int, default=2, help="Number of blocks to unfreeze in the model")
     args = parser.parse_args()
 
@@ -189,9 +193,11 @@ if __name__ == "__main__":
     if args.problem_type.lower() == "binaryclassification":
         dataset_full = CatDogBinary(df)
         class_str = dataset_full.species
+        num_classes = len(class_str)
     elif args.problem_type.lower() == "fineclassification":
         dataset_full = CatDogBreed(df)
-        class_str = dataset_full.breeds
+        class_str = None
+        num_classes = len(CatDogBreed.breeds)
     else:
         raise ValueError("the problem type must be \"binary classifiction\" or \"fineclassification\"")
     
@@ -202,17 +208,26 @@ if __name__ == "__main__":
     print(f"Train set size: {train_size}, test set size: {test_size}")
 
     g = torch.Generator().manual_seed(42)
-    train_dataset, test_dataset = random_split(dataset_full,
-                                               [train_size, test_size],
-                                               generator=g)
+    train_indices, test_indices = random_split(
+        range(len(dataset_full)),
+        [train_size, test_size],
+        generator=g
+    )
+
+    # train_dataset, test_dataset = random_split(dataset_full,
+    #                                            [train_size, test_size],
+    #                                            generator=g)
+
+    train_dataset = Subset(dataset_full, train_indices)
+    test_dataset  = Subset(dataset_full, test_indices)
     transform_train = v2.Compose([
         v2.Resize((224,224)),
+        v2.ToDtype(dtype=torch.float32, scale=True),
         v2.RandomHorizontalFlip(),
         v2.RandomGrayscale(p=0.1),
         v2.RandomRotation(degrees=15),
         v2.GaussianNoise(),
         v2.ColorJitter(),
-        v2.ToDtype(dtype=torch.float32, scale=True)
     ])
 
     transform_test =  v2.Compose([
@@ -220,6 +235,8 @@ if __name__ == "__main__":
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
     train_dataset.dataset.transform = transform_train
+    print(train_dataset.dataset.transform)
+
     test_dataset.dataset.transform = transform_test
 
     if train_size < args.batch_size:
@@ -232,6 +249,7 @@ if __name__ == "__main__":
     train_loader = data.DataLoader(train_dataset, batch_size=args.batch_size, collate_fn=collate_fn,
                                    shuffle=shuffle, pin_memory=True, sampler=sampler, drop_last=False,
                                    num_workers=8)
+    print(train_dataset.dataset.transform)
     val_loader = data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn, drop_last=False)
 
 
@@ -244,7 +262,7 @@ if __name__ == "__main__":
         param.requires_grad = False
 
     # Replace the classification head
-    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, len(class_str))
+    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, num_classes)
     # Train only the classification head
     for block in model.features[-args.unfreeze_blocks:]:
         for param in block.parameters():
@@ -294,6 +312,7 @@ if __name__ == "__main__":
     optimizer = optim_config.get_optimizer(model)
     lr_scheduler = optim_config.get_scheduler(optimizer)
 
+    
 
     ########################## Lance training loop ###############################
     training_loop(model=model,
@@ -303,6 +322,7 @@ if __name__ == "__main__":
                   val_loader=val_loader,
                   config=training_config,
                   logger=logger,
+                  num_classes=num_classes,
                   class_str=class_str)
 
 

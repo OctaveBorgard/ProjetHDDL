@@ -177,12 +177,44 @@ for i in range(len(test_error_pdf)):
 
     print(f"The model is wrong {Count} times, it predict a {gt_breed}:{gt_index} as a {pred_breed}:{pred_index}")
     show_images([breed_images[gt_index], breed_images[pred_index]], title=[str(gt_index), str(pred_index)])
-
-    
 # %%
-unfreezeze_blocks = 3
-for block in model.features[-unfreezeze_blocks:]:
-    print(block)
-    for param in block.parameters():
-        param.requires_grad = True
+transform_train = v2.Compose([
+    v2.Resize((224,224)),
+    v2.ToDtype(dtype=torch.float32, scale=True),
+    v2.RandomHorizontalFlip(),
+    v2.RandomGrayscale(p=0.1),
+    v2.ColorJitter(),
+    v2.GaussianNoise(),
+    v2.RandomRotation(degrees=15),
+])
+
+
+df = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/list.txt"),
+                image_path=os.path.join(project_abs_dir, "data/images"))
+dataset_full = CatDogBreed(df)
+class_str = dataset_full.breeds
+
+train_size = int(train_test_ratio*len(dataset_full))
+test_size = len(dataset_full) - train_size
+print(f"Train set size: {train_size}, test set size: {test_size}")
+
+g = torch.Generator().manual_seed(42)
+train_dataset, test_dataset = random_split(dataset_full,
+                                            [train_size, test_size],
+                                            generator=g)
+
+transform_eval =  v2.Compose([
+
+    v2.Resize((224,224)),
+    v2.ToDtype(dtype=torch.float32, scale=True)
+])
+
+train_dataset.dataset.transform = transform_train
+
+train_loader = DataLoader(train_dataset, batch_size=10, collate_fn=collate_fn,
+                                shuffle=False, pin_memory=True, drop_last=False,
+                                num_workers=8)
+# %%
+sample = next(iter(train_loader))
+show_images(sample[0])
 # %%
