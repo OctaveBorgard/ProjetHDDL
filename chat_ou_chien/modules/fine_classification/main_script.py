@@ -70,9 +70,8 @@ logger = LoggingConfig(project_dir=os.path.join(project_abs_dir, save_dir),
 logger.monitor_metric = "test_avg_loss"
 logger.monitor_mode = "min"
 
-state = logger.load_latest_checkpoint(checkpoint_path=os.path.join(project_abs_dir,
-                                                                   "exp/fine_classification/EfficientNet_6614/checkpoints/epoch_129_test_avg_loss_0.0106.pth")
-                                    )
+state = logger.load_latest_checkpoint()
+                                    
 # state = logger.load_best_checkpoint()
 model.load_state_dict(state['model_state_dict'])
 model.to(device)

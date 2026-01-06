@@ -52,12 +52,8 @@ def training_loop(
 
 
     train_avg_loss = OnlineMovingAverage(size=5000)
-    mean_iou_metric_avg_train = OnlineMovingAverage(size=1000)
-    dice_score_metric_avg_train = OnlineMovingAverage(size=1000)
-
+    
     test_avg_loss = OnlineMovingAverage(size=1000)
-    mean_iou_metric_avg_test = OnlineMovingAverage(size=1000)
-    dice_score_metric_avg_test = OnlineMovingAverage(size=1000)
 
 
     mean_iou_metric_train = MeanIoU(num_classes=num_classes, input_format='index').to(config.device)
@@ -74,7 +70,7 @@ def training_loop(
             # targets is a list of tensor
             model.train()
             images = torch.stack(images).to(config.device)
-            labels = torch.stack(labels).to(config.device)
+            labels = torch.stack(labels).to(config.device).long()
 
 
             pred_labels = model(images)
@@ -101,36 +97,29 @@ def training_loop(
 
                     pred_labels_test = model(images_test)
                     test_loss = criterion(pred_labels_test, labels_test)
-                    mean_iou_test = mean_iou_metric_test(pred_labels_test.argmax(dim=1, keepdim=True), labels_test)
-                    dice_score_test = dice_score_metric_test(pred_labels_test.argmax(dim=1, keepdim=True), labels_test)
+                    mean_iou_metric_test.update(pred_labels_test.argmax(dim=1, keepdim=True).long(), labels_test.long())
+                    dice_score_metric_test.update(pred_labels_test.argmax(dim=1, keepdim=True).long(), labels_test.long())
 
 
-                    mean_iou_train = mean_iou_metric_train(pred_labels.argmax(dim=1, keepdim=True), labels)
-                    dice_score_train = dice_score_metric_train(pred_labels.argmax(dim=1, keepdim=True), labels)
+                    mean_iou_metric_train.update(pred_labels.argmax(dim=1, keepdim=True).long(), labels.long())
+                    dice_score_metric_train.update(pred_labels.argmax(dim=1, keepdim=True).long(), labels.long())
                 
                 test_avg_loss.update(test_loss.item())
-                mean_iou_metric_avg_test.update(mean_iou_test.item())
-                dice_score_metric_avg_test.update(dice_score_test.item())
-
-                mean_iou_metric_avg_train.update(mean_iou_train.item())
-                dice_score_metric_avg_train.update(dice_score_train.item())
-
-                del images_test,  labels_test, pred_labels_test, test_loss, mean_iou_test, dice_score_test, mean_iou_train, dice_score_train
-                torch.cuda.empty_cache()    
 
                 metrics = {
                     "val_loss": test_avg_loss.mean,
-                    "val_mean_iou": mean_iou_metric_avg_test.mean,
-                    "val_dice_score": dice_score_metric_avg_test.mean,
+                    "val_mean_iou": mean_iou_metric_test.compute().item(),
+                    "val_dice_score": dice_score_metric_test.compute().item(),
                     "train_loss": train_avg_loss.mean,
-                    "train_mean_iou": mean_iou_metric_avg_train.mean,
-                    "train_dice_score": dice_score_metric_avg_train.mean,
+                    "train_mean_iou": mean_iou_metric_train.compute().item(),
+                    "train_dice_score": dice_score_metric_train.compute().item(),
                     "lr": optimizer.param_groups[0]["lr"],
                     "max_grad_norm": grad_norm.max()
                 }
 
                 logger.log_metrics(metrics, logger.global_step)
                 logger.log_histogram(grad_norm, "grad_norm", logger.global_step)
+                
 
             if ((logger.global_step+1) % logger.log_image_freq == 0) or (logger.global_step == 0):
                 model.eval()
@@ -172,7 +161,7 @@ def training_loop(
                 "scheduler_state_dict": lr_scheduler.state_dict() if lr_scheduler is not None else None
             }
 
-            logger.save_checkpoint(state, epoch, metric_value=test_avg_loss.mean)
+            logger.save_checkpoint(state, epoch, metric_value=dice_score_metric_test.compute().item())
             if  epoch % logger.save_freq == 0:
                 logger.clean_old_checkpoint()
 
@@ -222,15 +211,15 @@ if __name__ == "__main__":
         v2.RandomGrayscale(p=0.1),
         v2.GaussianNoise(),
         v2.ColorJitter(),
-        v2.RandomCrop((224,224), pad_if_needed=True),
+        v2.RandomCrop((224,224), pad_if_needed=True, fill=1),
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
 
     transform_test =  v2.Compose([
-        v2.RandomCrop((224,224), pad_if_needed=True),
+        v2.RandomCrop((224,224), pad_if_needed=True, fill=1),
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
-    dataset_train.transform = transform_train
+    dataset_train.transform = transform_test
     dataset_test.transform = transform_test
 
     if train_size < args.batch_size:
@@ -256,16 +245,16 @@ if __name__ == "__main__":
     print(f"Number of trainable parameters: {sum([p.numel() for p in model.parameters() if p.requires_grad])/1e6:.2f} Million")
 
     ######################### Training Config and training logger ##################
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dtype = torch.float32
+
 
     # Create training configuration
     training_config = TrainingConfig()
+    # training_config.device = "cpu"
     training_config.update(**vars(args))
 
     # Create logging configuration
-    monitor_metric = "test_avg_loss"
-    monitor_mode = "min"
+    monitor_metric = "val_dice_score"
+    monitor_mode = "max"
     num_log_images = 3
 
     # Save checkpoint every 400 steps

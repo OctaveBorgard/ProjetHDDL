@@ -109,7 +109,7 @@ class TrainingConfig:
 from collections import deque
 class OnlineMovingAverage:
     def __init__(self, size=5000):
-        self.size=5000
+        self.size=size
         self.queue = deque(maxlen=size)
         self.sum = 0.0
         self.mean = 1.0
@@ -339,7 +339,7 @@ class LoggingConfig:
                 return None
             else:
                 def get_epoch_num(checkpoint_path):
-                    match = re.search("epoch_(\d+)", checkpoint_path)
+                    match = re.search(r"epoch_(\d+)", checkpoint_path)
                     return int(match.group(1)) if match else -1
                 
                 checkpoint_path = max(checkpoints, key=get_epoch_num)

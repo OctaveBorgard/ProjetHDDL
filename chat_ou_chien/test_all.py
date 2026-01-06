@@ -96,3 +96,14 @@ print("Dice Loss:", dice_loss_fn(preds, targets).item())
 print("CE + Dice Loss:", cedice_loss_fn(preds, targets).item())
 
 # %%
+import torch
+from models import Unet_Segmenterv2
+model = Unet_Segmenterv2(in_channels=3, num_classes=3, layers_per_block=2)
+x_224 = torch.randn(4, 3, 224, 224)
+x_256 = torch.randn(4, 3, 256, 256)
+x_any = torch.randn(4, 3, 228, 228)  # Any shape!
+
+output_224 = model(x_224)  # → (4, 3, 224, 224)
+output_256 = model(x_256)  # → (4, 3, 256, 256)
+output_any = model(x_any)   # → (4, 3, 333, 455)
+# %%

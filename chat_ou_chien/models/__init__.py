@@ -1,1 +1,1 @@
-from .models import Unet_Segmenter, efficientnet_b0
+from .models import Unet_Segmenter, Unet_Segmenterv2 ,efficientnet_b0

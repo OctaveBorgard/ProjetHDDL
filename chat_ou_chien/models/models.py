@@ -104,7 +104,7 @@ class Unet_Segmenter(torch.nn.Module):
     in_channels = 3
     input_shape = (224, 244)
     num_classes = 3
-    block_out_channels = (64, 128, 256, 512, 1024)
+    block_out_channels = (16, 64, 128)
     
     def __init__(self,
                 layers_per_block: int=2,
@@ -200,3 +200,147 @@ def EfficientNetB0(num_classes: int, weights=EfficientNet_B0_Weights.DEFAULT):
     in_features = model.classifier[1].in_features
     model.classifier[1] = torch.nn.Linear(in_features, num_classes)
     return model
+
+
+class Unet_Segmenterv2(torch.nn.Module):
+    """
+    Adaptive U-Net Segmenter that can handle any input shape.
+    
+    The architecture automatically adapts to input dimensions at inference time,
+    ensuring skip connections work correctly regardless of input resolution.
+    
+    Args:
+        in_channels (int, optional): Number of input channels. Default: 3
+        num_classes (int, optional): Number of output classes. Default: 3
+        layers_per_block (int, optional): Number of ResNet blocks per layer. Default: 2
+        non_linearity (str, optional): Activation function name. Default: "swish"
+        skip_connection (bool, optional): Whether to use skip connections. Default: True
+        center_input_sample (bool, optional): Whether to scale input to [-1, 1]. Default: True
+        block_out_channels (tuple, optional): Output channels for each block level. Default: (16, 64, 128)
+    """
+    
+    def __init__(self,
+                in_channels: int = 3,
+                num_classes: int = 3,
+                layers_per_block: int = 2,
+                non_linearity: str = "swish",
+                skip_connection: bool = True,
+                center_input_sample: bool = True,
+                block_out_channels: Tuple[int, ...] = (16, 64, 128),
+                ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.num_classes = num_classes
+        self.center_input_sample = center_input_sample
+        self.block_out_channels = block_out_channels
+        self.skip_connection = skip_connection
+        self.non_linearity = non_linearity
+        self.layers_per_block = layers_per_block
+        
+        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=3, padding="same")
+        self.norm_in = nn.BatchNorm2d(block_out_channels[0])
+        self.activation_fn = get_activation(non_linearity)
+
+        self.down_blocks = nn.ModuleList()
+        self.mid_blocks = None
+        self.up_blocks = nn.ModuleList()
+
+        # Downsampling blocks
+        prev_out_channels = block_out_channels[0]
+        for out_channels in block_out_channels[:-1]:
+            for _ in range(layers_per_block):
+                resnet_block = ResnetBlock2D(
+                    in_channels=prev_out_channels,
+                    out_channels=out_channels,
+                    non_linearity=non_linearity,
+                    skip_connection=skip_connection,
+                )
+                self.down_blocks.append(resnet_block)
+                prev_out_channels = out_channels
+            self.down_blocks.append(nn.MaxPool2d(kernel_size=2, stride=2))
+        
+        # Middle block
+        self.mid_blocks = ResnetBlock2D(
+            in_channels=prev_out_channels,
+            out_channels=block_out_channels[-1],
+            non_linearity=non_linearity,
+            skip_connection=skip_connection,
+        )
+        prev_out_channels = block_out_channels[-1]
+        
+        # Upsampling blocks
+        reversed_block_out_channels = list(reversed(block_out_channels))
+        for out_channels in reversed_block_out_channels[1:]:
+            self.up_blocks.append(nn.ConvTranspose2d(prev_out_channels, out_channels, kernel_size=2, stride=2))
+            prev_out_channels = out_channels
+            for _ in range(layers_per_block):
+                resnet_block = ResnetBlock2D(
+                    in_channels=prev_out_channels*2,  # due to skip connection concatenation
+                    out_channels=out_channels,
+                    non_linearity=non_linearity,
+                    skip_connection=skip_connection,
+                )
+                self.up_blocks.append(resnet_block)
+                prev_out_channels = out_channels
+            
+        self.conv_out = nn.Conv2d(prev_out_channels, num_classes, kernel_size=3, padding="same")
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass that adapts to input shape.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W) where H and W can be any size.
+            
+        Returns:
+            torch.Tensor: Output logits of shape (B, num_classes, H, W) matching input spatial dimensions.
+        """
+        if self.center_input_sample:
+            x = 2.0 * x - 1.0  # scale to [-1, 1]
+
+        # Initial convolution
+        hidden_states = self.conv_in(x)
+        hidden_states = self.norm_in(hidden_states)
+        hidden_states = self.activation_fn(hidden_states)
+
+        skip_connections = []
+        
+        # Downsampling path
+        for block in self.down_blocks:
+            if isinstance(block, ResnetBlock2D):
+                hidden_states = block(hidden_states)
+                skip_connections.append(hidden_states)
+            else:  # MaxPool2d
+                hidden_states = block(hidden_states)
+        
+        # Middle block
+        hidden_states = self.mid_blocks(hidden_states)
+
+        # Upsampling path
+        for block in self.up_blocks:
+            if isinstance(block, nn.ConvTranspose2d):
+                hidden_states = block(hidden_states)
+            else:  # ResnetBlock2D
+                skip_connection = skip_connections.pop()
+                
+                # Adaptive skip connection: handle size mismatches due to odd dimensions
+                if hidden_states.shape[-2:] != skip_connection.shape[-2:]:
+                    # Crop or pad skip_connection to match hidden_states size
+                    h_diff = skip_connection.shape[-2] - hidden_states.shape[-2]
+                    w_diff = skip_connection.shape[-1] - hidden_states.shape[-1]
+                    
+                    if h_diff > 0 or w_diff > 0:
+                        # Crop skip connection
+                        h_crop = h_diff // 2
+                        w_crop = w_diff // 2
+                        skip_connection = skip_connection[
+                            :, :,
+                            h_crop:skip_connection.shape[-2]-h_crop if h_crop > 0 else skip_connection.shape[-2],
+                            w_crop:skip_connection.shape[-1]-w_crop if w_crop > 0 else skip_connection.shape[-1]
+                        ]
+                
+                hidden_states = block(hidden_states, skip_connection)
+        
+        logits = self.conv_out(hidden_states)
+        return logits

@@ -165,14 +165,13 @@ class CatDogSegmentation(CatDogDataset):
 
         
         segm_path = row["segm_path"]
-        segm = decode_image(segm_path)[:1]
+        segm = decode_image(segm_path)[:1] - 1
         segm = TvMask(segm)
         
         if self.transform is not None:
             # Apply transforms to both image and mask together to keep them aligned
             img, segm = self.transform(img, segm)
 
-        segm = segm - 1
         return img, segm
     
 

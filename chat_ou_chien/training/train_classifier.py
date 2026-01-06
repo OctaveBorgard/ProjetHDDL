@@ -227,8 +227,8 @@ if __name__ == "__main__":
         v2.Resize((224,224)),
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
-    dataset_train.dataset.transform = transform_train
-    dataset_test.dataset.transform = transform_test
+    dataset_train.transform = transform_test
+    dataset_test.transform = transform_test
 
     if train_size < args.batch_size:
         sampler = data.RandomSampler(dataset_train, replacement=True, num_samples=args.batch_size)
@@ -252,7 +252,7 @@ if __name__ == "__main__":
         param.requires_grad = False
 
     # Replace the classification head
-    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, 3)
+    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, len(class_str))
     # Train only the classification head
     for block in model.features[-args.unfreeze_blocks:]:
         for param in block.parameters():
@@ -312,8 +312,9 @@ if __name__ == "__main__":
                   val_loader=val_loader,
                   config=training_config,
                   logger=logger,
-                  num_classes=3,
-                  class_str=class_str)
+                  num_classes=len(class_str),
+                  class_str=None if args.problem_type.lower() == "fineclassification" else class_str
+                  )
 
 
 
