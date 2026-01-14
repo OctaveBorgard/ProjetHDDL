@@ -21,7 +21,6 @@ from torchvision.transforms import v2
 import torch
 from utils import CatDogSegmentation, create_df, show_images
 from models import Unet_Segmenter
-from training.train_utils import dice_loss
 data_dir = "data"
 df = create_df(cls_list_path=os.path.join(data_dir,"annotations/trainval.txt"),
                      image_path=os.path.join(data_dir, "images"),
@@ -29,6 +28,31 @@ df = create_df(cls_list_path=os.path.join(data_dir,"annotations/trainval.txt"),
 
 catdog_seg = CatDogSegmentation(df=df)
 model = Unet_Segmenter()
+
+
+#%%
+# get statistics of the width and height of the images in the dataset
+widths = []
+heights = []
+for i in range(len(catdog_seg)):
+    img, mask = catdog_seg[i]
+    widths.append(img.shape[2])
+    heights.append(img.shape[1])
+
+# plot histogram of widths and heights 
+fig, axs =plt.subplots(nrows=1, ncols=2,figsize=(12, 5), sharey=True)
+axs[0].hist(widths, bins=30, color='blue', alpha=0.7)
+axs[0].set_title('Histogram of Image Widths')
+axs[0].set_xlabel('Width (pixels)')
+axs[0].set_ylabel('Frequency')
+axs[1].hist(heights, bins=30, color='green', alpha=0.7)
+axs[1].set_title('Histogram of Image Heights')
+axs[1].set_xlabel('Height (pixels)')
+axs[1].set_ylabel('Frequency')
+plt.tight_layout()
+plt.show()
+
+#%%
 
 
 transform = v2.Compose([
@@ -45,6 +69,10 @@ catdog_seg.transform = transform
 sample = catdog_seg[0]
 img, mask = sample
 #%%
+
+
+
+
 
 output = model(img.unsqueeze(0))
 
@@ -99,11 +127,16 @@ print("CE + Dice Loss:", cedice_loss_fn(preds, targets).item())
 import torch
 from models import Unet_Segmenterv2
 model = Unet_Segmenterv2(in_channels=3, num_classes=3, layers_per_block=2)
-x_224 = torch.randn(4, 3, 224, 224)
-x_256 = torch.randn(4, 3, 256, 256)
-x_any = torch.randn(4, 3, 228, 228)  # Any shape!
+x_224 = torch.randn(3, 224, 224)
+x_256 = torch.randn(3, 256, 256)
+x_any = torch.randn(3, 228, 228)  # Any shape!
 
-output_224 = model(x_224)  # → (4, 3, 224, 224)
-output_256 = model(x_256)  # → (4, 3, 256, 256)
-output_any = model(x_any)   # → (4, 3, 333, 455)
+# test forward pass with a list of images of different sizes
+# img_list = [x_224, x_256, x_any]
+img_list = [x_224, x_224]
+outputs = model(img_list)
+for i, out in enumerate(outputs):
+    print(f"Output shape for input {i}: {out.shape}")
+
+
 # %%

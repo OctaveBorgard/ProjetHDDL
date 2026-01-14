@@ -183,6 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--save_dir", type=str, help="Saved directory",
                         default='/home/bao/School/5A/HDDL/bacteria_detection_app/exp/default')
+    parser.add_argument("--crop_size", type=int, default=224, help="Crop size for training and testing")
     args = parser.parse_args()
 
     #################### DEFINE DATASET ##############################
@@ -207,19 +208,19 @@ if __name__ == "__main__":
     print(f"Train set size: {train_size}, test set size: {test_size}")
 
     transform_train = v2.Compose([
+        v2.RandomCrop((args.crop_size,args.crop_size), pad_if_needed=True, fill=1),
+        v2.ToDtype(dtype=torch.float32, scale=True),
         v2.RandomHorizontalFlip(),
-        v2.RandomGrayscale(p=0.1),
-        v2.GaussianNoise(),
+        # v2.RandomGrayscale(p=0.1),
+        # v2.GaussianNoise(),
         v2.ColorJitter(),
-        v2.RandomCrop((224,224), pad_if_needed=True, fill=1),
-        v2.ToDtype(dtype=torch.float32, scale=True)
     ])
 
     transform_test =  v2.Compose([
-        v2.RandomCrop((224,224), pad_if_needed=True, fill=1),
+        v2.RandomCrop((args.crop_size,args.crop_size), pad_if_needed=True, fill=1),
         v2.ToDtype(dtype=torch.float32, scale=True)
     ])
-    dataset_train.transform = transform_test
+    dataset_train.transform = transform_train
     dataset_test.transform = transform_test
 
     if train_size < args.batch_size:
@@ -237,6 +238,7 @@ if __name__ == "__main__":
 
     ########################### DEFINE MODEL ############################
     model_kwargs = dict(layers_per_block=2,
+                        block_out_channels=(16, 64, 128),
                         non_linearity="silu",
                         skip_connection=True,
                         center_input_sample=True)
@@ -249,7 +251,6 @@ if __name__ == "__main__":
 
     # Create training configuration
     training_config = TrainingConfig()
-    # training_config.device = "cpu"
     training_config.update(**vars(args))
 
     # Create logging configuration
@@ -274,7 +275,7 @@ if __name__ == "__main__":
                          num_log_images=num_log_images)
     
     logger = LoggingConfig(project_dir=os.path.join(project_path, args.save_dir),
-                        exp_name=f"EfficientNet_{train_size}",
+                        exp_name=f"Unet_Segmenter_crop_{args.crop_size}",
                         **logger_kwargs)
     logger.initialize()
     logger.log_hyperparameters(vars(args), main_key="training_config")

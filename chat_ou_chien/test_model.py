@@ -244,3 +244,12 @@ for i in range(n):
     output_any = model(x_any)   # → (4, 3, h, w)
     assert output_any.shape[-2] == h and output_any.shape[-1] == w, f"Test failed for input shape {(h,w)}"
 # %%
+import torch
+from models import Unet_Segmenter
+model_kwargs = dict(layers_per_block=1,
+                        block_out_channels=(64, 128, 256),
+                        non_linearity="silu",
+                        skip_connection=True,
+                        center_input_sample=True)
+model = Unet_Segmenter(**model_kwargs)
+# %%

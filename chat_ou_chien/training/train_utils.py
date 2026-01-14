@@ -587,7 +587,9 @@ class DiceCELoss(torch.nn.Module):
 
 
         
-
-
+# collate function for variable size images
+def collate_variable_size(batch):
+    images, labels = zip(*batch)
+    return list(images), list(labels)
 
 
