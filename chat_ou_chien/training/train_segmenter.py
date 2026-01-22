@@ -178,7 +178,6 @@ if __name__ == "__main__":
     from train_utils import collate_fn, DiceCELoss
 
     parser = argparse.ArgumentParser(description="Training script for Unet_Segmenter task.")
-    parser.add_argument("--train_test_ratio", type=float, default=0.8, help="The train test split ratio")
     parser.add_argument("--num_epochs", type=int, default=300, help="Numeber of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--save_dir", type=str, help="Saved directory",
@@ -190,14 +189,14 @@ if __name__ == "__main__":
     project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     data_path = os.path.join(project_path, "data")
 
-    df = create_df(cls_list_path=os.path.join(data_path, "annotations/list.txt"),
+    df_train = create_df(cls_list_path=os.path.join(data_path, "annotations/trainval.txt"),
                    image_path=os.path.join(data_path, "images"),
                    segmentation_annot_path=os.path.join(data_path, "annotations/trimaps"))
     
-    ramdom_state = np.random.RandomState(seed=42)
-    df_train = df.sample(frac=args.train_test_ratio, random_state=ramdom_state)
-    df_test = df.drop(df_train.index).reset_index(drop=True)
-    df_train = df_train.reset_index(drop=True)
+    df_test = create_df(cls_list_path=os.path.join(data_path, "annotations/test.txt"),
+                   image_path=os.path.join(data_path, "images"),
+                   segmentation_annot_path=os.path.join(data_path, "annotations/trimaps"))
+    
     
     dataset_train = CatDogSegmentation(df_train)
     dataset_test = CatDogSegmentation(df_test)
@@ -211,8 +210,6 @@ if __name__ == "__main__":
         v2.RandomCrop((args.crop_size,args.crop_size), pad_if_needed=True, fill=1),
         v2.ToDtype(dtype=torch.float32, scale=True),
         v2.RandomHorizontalFlip(),
-        # v2.RandomGrayscale(p=0.1),
-        # v2.GaussianNoise(),
         v2.ColorJitter(),
     ])
 

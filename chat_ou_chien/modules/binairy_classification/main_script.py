@@ -19,41 +19,6 @@ from PIL import Image
 from deepinv.utils import plot
 
 # %%
-num_class = 2
-model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT)
-# model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, num_class)
-num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"Number of parameters: {num_params}")
-model.train()
-
-df = create_df(cls_list_path=os.path.join(project_abs_dir,"data/annotations/trainval.txt"),
-               image_path=os.path.join(project_abs_dir, "data/images"))
-catdog = CatDogBinary(df, transforms=v2.Resize((224,224)))
-
-criterion = torch.nn.CrossEntropyLoss()
-preprocess = EfficientNet_B0_Weights.DEFAULT.transforms()
-
-#%%
-indices = np.random.randint(low=0, high=1000, size=(5,))
-
-
-img_samples, species_samples = catdog[indices]
-
-species_samples= torch.tensor(species_samples)
-input = torch.stack(img_samples)
-
-input_transformed = preprocess(input)
-
-out = model(input_transformed)
-loss = criterion(out, species_samples)
-print(loss)
-#%%
-
-# 5. Get class label
-classes =  EfficientNet_B0_Weights.DEFAULT.meta["categories"]
-pred_idx = out.argmax(dim=1)
-plot(img_samples, titles=[classes[id] for id in pred_idx])
-# %%
 from torch.utils.data import random_split, RandomSampler, DataLoader
 from training import (collate_fn,
                       LoggingConfig,
@@ -62,30 +27,32 @@ from training import (collate_fn,
 device = "cuda" if torch.cuda.is_available() else "cpu"
 train_test_ratio = 0.9
 batch_size = 64
-save_dir = "exp/binary_classification"
+save_dir = "exp/binaryclassification"
 
 #################### DEFINE DATASET ##############################
-df = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/list.txt"),
+df_train = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/trainval.txt"),
                 image_path=os.path.join(project_abs_dir, "data/images"))
-dataset_full = CatDogBinary(df)
-class_str = dataset_full.species
 
-train_size = int(train_test_ratio*len(dataset_full))
-test_size = len(dataset_full) - train_size
+df_test = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/test.txt"),
+                image_path=os.path.join(project_abs_dir, "data/images"))
+
+train_dataset = CatDogBinary(df=df_train)
+test_dataset = CatDogBinary(df=df_test)
+class_str = CatDogBinary.species
+
+train_size = len(train_dataset)
+test_size = len(test_dataset)
 print(f"Train set size: {train_size}, test set size: {test_size}")
 
-g = torch.Generator().manual_seed(42)
-train_dataset, test_dataset = random_split(dataset_full,
-                                            [train_size, test_size],
-                                            generator=g)
+
 
 transform_eval =  v2.Compose([
     v2.Resize((224,224)),
     v2.ToDtype(dtype=torch.float32, scale=True)
 ])
 
-train_dataset.dataset.transform = transform_eval
-test_dataset.dataset.transform = transform_eval 
+train_dataset.transform = transform_eval
+test_dataset.transform = transform_eval 
 if train_size < batch_size:
     sampler = RandomSampler(train_dataset, replacement=True, num_samples=batch_size)
     shuffle = False
@@ -113,7 +80,7 @@ logger.monitor_metric = "train_avg_loss"
 logger.monitor_mode = "min"
 
 # state = logger.load_checkpoint()
-state = torch.load(os.path.join(project_abs_dir, "exp/binary_classification/EfficientNet_6614/checkpoints/epoch_066_test_avg_loss_0.0013.pth"))
+state = torch.load(os.path.join(project_abs_dir, "exp/binaryclassification/EfficientNet/checkpoints/epoch_504_test_avg_loss_0.00060.pth"))
 model.load_state_dict(state['model_state_dict'])
 model.to(device)
 model.eval()
@@ -121,35 +88,33 @@ model.eval()
 train_accuracy = 0
 test_accuracy = 0
 
-with torch.no_grad():
-    for images, labels in train_loader:
-        images = torch.stack(images).to(device)
-        labels = torch.tensor(labels, device=device)
+for images, labels in train_loader:
+    images = torch.stack(images).to(device)
+    labels = torch.tensor(labels, device=device)
 
-        pred_labels = model(images).detach().argmax(
-            dim=1, keepdim=False)
-        indice_fail = labels != pred_labels
-        if torch.sum(indice_fail) > 0:
-            show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
-        train_accuracy += torch.sum(labels == pred_labels).item()
-    train_accuracy = train_accuracy/train_size
+    with torch.no_grad():
+        pred_labels = model(images).detach().argmax(dim=1, keepdim=False)
+    indice_fail = labels != pred_labels
+    if torch.sum(indice_fail) > 0:
+        show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
+    train_accuracy += torch.sum(labels == pred_labels).item()
+train_accuracy = train_accuracy/train_size
 
-    for images, labels in val_loader:
-        images = torch.stack(images).to(device)
-        labels = torch.tensor(labels, device=device)
+for images, labels in val_loader:
+    images = torch.stack(images).to(device)
+    labels = torch.tensor(labels, device=device)
 
-        pred_labels = model(images).detach().argmax(
-            dim=1, keepdim=False)
-        
-        indice_fail = labels != pred_labels
-        if torch.sum(indice_fail) > 0:
-            show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
+    with torch.no_grad():
+        pred_labels = model(images).detach().argmax(dim=1, keepdim=False)
+    indice_fail = labels != pred_labels
+    if torch.sum(indice_fail) > 0:
+        show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
 
-        test_accuracy += torch.sum(labels == pred_labels).item()
-    test_accuracy = test_accuracy/test_size
+    test_accuracy += torch.sum(labels == pred_labels).item()
+test_accuracy = test_accuracy/test_size
 
 print(f"Accuracy obtained on train set: {train_accuracy:.3f}, and on test set: {test_accuracy:.3f}")
-    
+
 
 
 

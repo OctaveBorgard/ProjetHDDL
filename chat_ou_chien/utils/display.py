@@ -42,6 +42,7 @@ def show_images(
     savename: Optional[str] = None,
     figsize: Optional[int] = 3,
     interpolation: Optional[str] = None,
+    tight_layout: Optional[bool] = True, 
 ):
     if not isinstance(imgs, np.ndarray):
         if isinstance(imgs, list) or isinstance(imgs, tuple):
@@ -156,5 +157,7 @@ def show_images(
             fig.savefig(savename, bbox_inches="tight", pad_inches=0)
             plt.close()
         else:
+            if tight_layout:
+                plt.tight_layout()
             plt.show()
 

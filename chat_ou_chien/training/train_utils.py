@@ -235,7 +235,7 @@ class LoggingConfig:
         Return checkpoint path based on epoch and metric value
         """
         if metric_value is not None:
-            return os.path.join(self.checkpoint_dir, f"epoch_{epoch:03d}_{self.monitor_metric}_{metric_value:.4f}.pth")
+            return os.path.join(self.checkpoint_dir, f"epoch_{epoch:03d}_{self.monitor_metric}_{metric_value:.5f}.pth")
         else:
             return os.path.join(self.checkpoint_dir, f"epoch_{epoch:03d}.pth")
         

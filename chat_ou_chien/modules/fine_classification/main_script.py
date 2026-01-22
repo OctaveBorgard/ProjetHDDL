@@ -26,30 +26,32 @@ from training import (collate_fn,
 device = "cuda" if torch.cuda.is_available() else "cpu"
 train_test_ratio = 0.9
 batch_size = 64
-save_dir = "exp/fine_classification"
+save_dir = "exp/fineclassification"
 
 #################### DEFINE DATASET ##############################
-df = create_df(cls_list_path=os.path.join(project_abs_dir, "data/annotations/list.txt"),
-                image_path=os.path.join(project_abs_dir, "data/images"))
-dataset_full = CatDogBreed(df)
-class_str = dataset_full.breeds
+df_train = create_df(
+    cls_list_path=os.path.join(project_abs_dir, "data/annotations/trainval.txt"),
+    image_path=os.path.join(project_abs_dir, "data/images"))
 
-train_size = int(train_test_ratio*len(dataset_full))
-test_size = len(dataset_full) - train_size
+df_test = create_df(
+    cls_list_path=os.path.join(project_abs_dir, "data/annotations/test.txt"),
+    image_path=os.path.join(project_abs_dir, "data/images"))
+
+train_dataset = CatDogBreed(df_train)
+test_dataset = CatDogBreed(df_test)
+class_str = CatDogBreed.breeds
+
+train_size = len(train_dataset)
+test_size = len(test_dataset)
 print(f"Train set size: {train_size}, test set size: {test_size}")
-
-g = torch.Generator().manual_seed(42)
-train_dataset, test_dataset = random_split(dataset_full,
-                                            [train_size, test_size],
-                                            generator=g)
 
 transform_eval =  v2.Compose([
     v2.Resize((224,224)),
     v2.ToDtype(dtype=torch.float32, scale=True)
 ])
 
-train_dataset.dataset.transform = transform_eval
-test_dataset.dataset.transform = transform_eval 
+train_dataset.transform = transform_eval
+test_dataset.transform = transform_eval 
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, collate_fn=collate_fn,
                                 shuffle=False, pin_memory=True, drop_last=False,
@@ -66,11 +68,12 @@ model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, len(class
 ######################### training logger ##################
 
 logger = LoggingConfig(project_dir=os.path.join(project_abs_dir, save_dir),
-                        exp_name=f"EfficientNet_{train_size}")
+                        exp_name=f"EfficientNet")
 logger.monitor_metric = "test_avg_loss"
 logger.monitor_mode = "min"
 
-state = logger.load_latest_checkpoint()
+# state = logger.load_best_checkpoint()
+state = torch.load(os.path.join(project_abs_dir, "exp/fineclassification/EfficientNet/checkpoints/epoch_105_test_avg_loss_0.00396.pth"))
                                     
 # state = logger.load_best_checkpoint()
 model.load_state_dict(state['model_state_dict'])
@@ -86,7 +89,7 @@ test_accuracy = 0
 cnt = 0
 mapping = np.zeros(shape=(len(class_str),))
 breed_images = dict()
-for img, label in dataset_full:
+for img, label in train_dataset:
     if mapping[label] == 0:
         breed_images[label.item()] = img
         mapping[label] = 1
@@ -106,10 +109,10 @@ with torch.no_grad():
             dim=1, keepdim=False)
         indice_fail = (labels != pred_labels)
         
-        train_error_df["gt_breed"].extend([class_str[label] for label in labels[indice_fail].tolist()])
-        train_error_df["pred_breed"].extend([class_str[pred_label] for pred_label in pred_labels[indice_fail].tolist()])
-        train_error_df["gt_index"].extend([label for label in labels[indice_fail].tolist()])
-        train_error_df["pred_index"].extend([pred_label for pred_label in pred_labels[indice_fail].tolist()])
+        # train_error_df["gt_breed"].extend([class_str[label] for label in labels[indice_fail].tolist()])
+        # train_error_df["pred_breed"].extend([class_str[pred_label] for pred_label in pred_labels[indice_fail].tolist()])
+        # train_error_df["gt_index"].extend([label for label in labels[indice_fail].tolist()])
+        # train_error_df["pred_index"].extend([pred_label for pred_label in pred_labels[indice_fail].tolist()])
         if torch.sum(indice_fail) > 0:
             show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
         train_accuracy += torch.sum(labels == pred_labels).item()
@@ -124,13 +127,13 @@ with torch.no_grad():
         
         indice_fail = labels != pred_labels
 
-        test_error_df["gt_breed"].extend([class_str[label] for label in labels[indice_fail].tolist()])
-        test_error_df["pred_breed"].extend([class_str[pred_label] for pred_label in pred_labels[indice_fail].tolist()])
-        test_error_df["gt_index"].extend([label for label in labels[indice_fail].tolist()])
-        test_error_df["pred_index"].extend([pred_label for pred_label in pred_labels[indice_fail].tolist()])
+        # test_error_df["gt_breed"].extend([class_str[label] for label in labels[indice_fail].tolist()])
+        # test_error_df["pred_breed"].extend([class_str[pred_label] for pred_label in pred_labels[indice_fail].tolist()])
+        # test_error_df["gt_index"].extend([label for label in labels[indice_fail].tolist()])
+        # test_error_df["pred_index"].extend([pred_label for pred_label in pred_labels[indice_fail].tolist()])
 
-        if torch.sum(indice_fail) > 0:
-            show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
+        # if torch.sum(indice_fail) > 0:
+            # show_images(images[indice_fail], title=[f"T:{labels[i].item()}, P:{pred_labels[i].item()}" for i in torch.where(indice_fail)[0]])
 
         test_accuracy += torch.sum(labels == pred_labels).item()
     test_accuracy = test_accuracy/test_size
@@ -189,16 +192,3 @@ transform_train = v2.Compose([
 
 
 
-# %%
-dataset_full_raw = CatDogBreed(df)
-image_size = set([img.shape[-2:] for img, _ in dataset_full_raw])
-
-# %%
-image_size = list(image_size)
-print(image_size[:4])
-# %%
-min_h = min([size[0] for size in image_size])
-min_w = min([size[1] for size in image_size])
-print(f"Minimum height: {min_h}, minimum width: {min_w}")
-
-# %%

@@ -166,7 +166,7 @@ if __name__ == "__main__":
     from utils import (CatDogBinary,
                        CatDogBreed,
                        create_df)
-    from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
+    from torchvision.models import efficientnet_b0, efficientnet_b2, EfficientNet_B0_Weights, EfficientNet_B2_Weights
     import torch.utils.data as data
     from torch.utils.data import random_split
     import argparse  
@@ -176,7 +176,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Training script for EfficienttNetB0 for Dog and Cat classification task.")
     parser.add_argument("--problem_type", type=str, default="binaryclassification",
                         choices=['binaryclassification', 'fineclassification'])
-    parser.add_argument("--train_test_ratio", type=float, default=0.8, help="The train test split ratio")
     parser.add_argument("--num_epochs", type=int, default=300, help="Numeber of training epochs")
     parser.add_argument("--batch_size", type=int, default=128, help="Batch size for training")
     parser.add_argument("--save_dir", type=str, help="Saved directory",
@@ -187,14 +186,11 @@ if __name__ == "__main__":
     #################### DEFINE DATASET ##############################
     project_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     data_path = os.path.join(project_path, "data")
-
-    df = create_df(cls_list_path=os.path.join(data_path, "annotations/list.txt"),
-                   image_path=os.path.join(data_path, "images"))
     
-    ramdom_state = np.random.RandomState(seed=42)
-    df_train = df.sample(frac=args.train_test_ratio, random_state=ramdom_state)
-    df_test = df.drop(df_train.index).reset_index(drop=True)
-    df_train = df_train.reset_index(drop=True)
+    df_train = create_df(cls_list_path=os.path.join(data_path, "annotations/trainval.txt"),
+                   image_path=os.path.join(data_path, "images"))
+    df_test = create_df(cls_list_path=os.path.join(data_path, "annotations/test.txt"),
+                   image_path=os.path.join(data_path, "images"))
     
     if args.problem_type.lower() == "binaryclassification":
         dataset_train = CatDogBinary(df_train)
@@ -217,9 +213,7 @@ if __name__ == "__main__":
         v2.Resize((224,224)),
         v2.ToDtype(dtype=torch.float32, scale=True),
         v2.RandomHorizontalFlip(),
-        v2.RandomGrayscale(p=0.1),
         v2.RandomRotation(degrees=15),
-        v2.GaussianNoise(),
         v2.ColorJitter(),
     ])
 
@@ -244,8 +238,12 @@ if __name__ == "__main__":
 
 
     ########################### DEFINE MODEL ########################
-    model_kwargs = dict(weights=EfficientNet_B0_Weights.DEFAULT)
-    model = efficientnet_b0(**model_kwargs)
+    if args.problem_type.lower() == "fineclassification":
+        model_kwargs = dict(weights=EfficientNet_B2_Weights.DEFAULT)
+        model = efficientnet_b2(**model_kwargs)
+    else:
+        model_kwargs = dict(weights=EfficientNet_B0_Weights.DEFAULT)
+        model = efficientnet_b0(**model_kwargs)
 
     # Freeze ALL parameters first
     for param in model.parameters():
@@ -254,9 +252,10 @@ if __name__ == "__main__":
     # Replace the classification head
     model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, len(class_str))
     # Train only the classification head
-    for block in model.features[-args.unfreeze_blocks:]:
-        for param in block.parameters():
-            param.requires_grad = True
+    if args.unfreeze_blocks != 0:
+        for block in model.features[-args.unfreeze_blocks:]:
+            for param in block.parameters():
+                param.requires_grad = True
 
     print("Number of trainable parameters: ", sum([p.numel() for p in model.parameters() if p.requires_grad]))
     print("Number of parameters: ", sum([p.numel() for p in model.parameters()]))
@@ -292,8 +291,8 @@ if __name__ == "__main__":
                          log_image_freq=log_image_freq,
                          num_log_images=num_log_images)
     
-    logger = LoggingConfig(project_dir=os.path.join(project_path, args.save_dir),
-                        exp_name=f"EfficientNet_{train_size}",
+    logger = LoggingConfig(project_dir=os.path.join(project_path, 'exp', args.problem_type),
+                        exp_name=f"EfficientNetB2",
                         **logger_kwargs)
     logger.initialize()
     logger.log_hyperparameters(vars(args), main_key="training_config")
