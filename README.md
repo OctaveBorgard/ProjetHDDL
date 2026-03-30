@@ -3,7 +3,7 @@ This project was developed by Quoc-Bao Do, Thi-Bao-Ngoc Nguyen, Mata-Dramane Sid
 ## Projects Overview
 
 ### CVAE
-Example and detailed explanation of a **Variational Autoencoder (VAE)**, including its architecture and how it learns latent representations.
+Example and detailed explanation of a **Conditional Variational Autoencoder (CVAE)**, including its architecture and how it learns latent representations.
 
 ### Dog vs Cat
 Example of an image processing project covering both **classification** and **segmentation**, with explanations of the methods used.
