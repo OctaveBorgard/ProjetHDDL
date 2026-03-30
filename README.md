@@ -1,4 +1,4 @@
-This project was developed by Do Quoc-Bao, Nguyen Thi-Bao-Ngoc, Sidibe Mata-Dramane and Borgard Octave.
+This project was developed by Quoc-Bao Do, Thi-Bao-Ngoc Nguyen, Mata-Dramane Sidibe and Octave Borgard.
 
 ## Projects Overview
 
