@@ -1,1 +1,12 @@
-On est tout étrangers, donc s'il y a des erreurs lingustiques. Merci de nous tolérer, on a bien essayé de les corriger, mais il en reste probablement encore.
+This project was developed by Do Quoc-Bao, Nguyen Thi-Bao-Ngoc, Sidibe Mata-Dramane and Borgard Octave.
+
+## Projects Overview
+
+### CVAE
+Example and detailed explanation of a **Variational Autoencoder (VAE)**, including its architecture and how it learns latent representations.
+
+### Dog vs Cat
+Example of an image processing project covering both **classification** and **segmentation**, with explanations of the methods used.
+
+### ViT vs CNN
+Comparative illustration of how **Convolutional Neural Networks (CNNs)** and **Vision Transformers (ViTs)** work, highlighting their key differences in architecture and behavior.
